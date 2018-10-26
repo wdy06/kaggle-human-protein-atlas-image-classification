@@ -1,0 +1,221 @@
+import os, sys
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# The GPU id to use, usually either "0" or "1"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
+from datetime import datetime
+import numpy as np
+import pandas as pd
+#import matplotlib.pyplot as plt
+import skimage.io
+
+from scipy.misc import imread, imresize
+from skimage.transform import resize
+from tqdm import tqdm
+
+import keras
+from keras.preprocessing.image import ImageDataGenerator
+from keras.applications import Xception
+from keras.models import Sequential, Model, load_model
+from keras.layers import Activation, Dense, Multiply, Input
+from keras.callbacks import ModelCheckpoint, TensorBoard
+from keras import metrics
+from keras.optimizers import Adam  
+from keras import backend as K
+import tensorflow as tf
+
+from itertools import chain
+from collections import Counter
+import warnings
+warnings.filterwarnings("ignore")
+
+path_to_train = './data/train/'
+data = pd.read_csv('./data/train.csv')
+
+log_dir = os.path.join('./tflog/', datetime.strftime(datetime.now(), '%Y%m%d%H%M%S'))
+print('create directory {}'.format(log_dir))
+os.mkdir(log_dir)
+
+train_dataset_info = []
+for name, labels in zip(data['Id'], data['Target'].str.split(' ')):
+    train_dataset_info.append({
+        'path':os.path.join(path_to_train, name),
+        'labels':np.array([int(label) for label in labels])})
+train_dataset_info = np.array(train_dataset_info)
+
+class DataGenerator:
+    def __init__(self):
+        self.image_generator = ImageDataGenerator(rescale=1. / 255,
+                                     vertical_flip=True,
+                                     horizontal_flip=True,
+                                     rotation_range=180,
+                                     fill_mode='reflect')
+    def create_train(self, dataset_info, batch_size, shape, augument=True):
+        assert shape[2] == 3
+        while True:
+            random_indexes = np.random.choice(len(dataset_info), batch_size)
+            batch_images1 = np.empty((batch_size, shape[0], shape[1], shape[2]))
+            batch_images2 = np.empty((batch_size, shape[0], shape[1], shape[2]))
+            batch_labels = np.zeros((batch_size, 28))
+            for i, idx in enumerate(random_indexes):
+                image1, image2 = self.load_image(
+                    dataset_info[idx]['path'], shape)
+                batch_images1[i] = image1
+                batch_images2[i] = image2
+                batch_labels[i][dataset_info[idx]['labels']] = 1
+            yield [batch_images1, batch_images2], batch_labels
+            
+    
+    def load_image(self, path, shape):
+        image_red_ch = skimage.io.imread(path+'_red.png')
+        image_yellow_ch = skimage.io.imread(path+'_yellow.png')
+        image_green_ch = skimage.io.imread(path+'_green.png')
+        image_blue_ch = skimage.io.imread(path+'_blue.png')
+
+        image1 = np.stack((
+            image_red_ch, 
+            image_yellow_ch, 
+            image_blue_ch), -1)
+        image2 = np.stack((
+            image_green_ch, 
+            image_green_ch, 
+            image_green_ch), -1)
+        image1 = resize(image1, (shape[0], shape[1], 3), mode='reflect')
+        image2 = resize(image2, (shape[0], shape[1], 3), mode='reflect')
+        return image1.astype(np.float), image2.astype(np.float)
+
+# create train datagen
+train_datagen = DataGenerator()
+
+generator = train_datagen.create_train(
+    train_dataset_info, 5, (299,299,3))
+
+# from https://www.kaggle.com/kmader/rgb-transfer-learning-with-inceptionv3-for-protein
+data['target_list'] = data['Target'].map(lambda x: [int(a) for a in x.split(' ')])
+all_labels = list(chain.from_iterable(data['target_list'].values))
+c_val = Counter(all_labels)
+n_keys = c_val.keys()
+max_idx = max(n_keys)
+data['target_vec'] = data['target_list'].map(lambda ck: [i in ck for i in range(max_idx+1)])
+from sklearn.model_selection import train_test_split
+train_df, valid_df = train_test_split(data, 
+                 test_size = 0.2, 
+                  # hack to make stratification work                  
+                 stratify = data['Target'].map(lambda x: x[:3] if '27' not in x else '0'), random_state=42)
+print(train_df.shape[0], 'training masks')
+print(valid_df.shape[0], 'validation masks')
+train_df.to_csv('train_part.csv')
+valid_df.to_csv('valid_part.csv')
+
+train_dataset_info = []
+for name, labels in zip(train_df['Id'], train_df['Target'].str.split(' ')):
+    train_dataset_info.append({
+        'path':os.path.join(path_to_train, name),
+        'labels':np.array([int(label) for label in labels])})
+train_dataset_info = np.array(train_dataset_info)
+valid_dataset_info = []
+for name, labels in zip(valid_df['Id'], valid_df['Target'].str.split(' ')):
+    valid_dataset_info.append({
+        'path':os.path.join(path_to_train, name),
+        'labels':np.array([int(label) for label in labels])})
+valid_dataset_info = np.array(valid_dataset_info)
+print(train_dataset_info.shape, valid_dataset_info.shape)
+
+
+
+def create_model(input_shape, n_out):
+    inp_image = Input(shape=input_shape)
+    inp_mask = Input(shape=input_shape)
+    pretrain_model_image = Xception(
+        include_top=False, 
+        weights='imagenet', 
+        pooling='max')
+    pretrain_model_image.name='xception_image'
+    pretrain_model_mask = Xception(
+        include_top=False, 
+        weights='imagenet',    
+        pooling='max')
+    pretrain_model_mask.name='xception_mask'
+    
+    
+    x = Multiply()([pretrain_model_image(inp_image), pretrain_model_mask(inp_mask)])
+    out = Dense(n_out, activation='sigmoid')(x)
+    model = Model(inputs=[inp_image, inp_mask], outputs=[out])
+
+    return model
+
+
+def f1(y_true, y_pred):
+    y_pred = K.round(y_pred)
+    tp = K.sum(K.cast(y_true*y_pred, 'float'), axis=0)
+    tn = K.sum(K.cast((1-y_true)*(1-y_pred), 'float'), axis=0)
+    fp = K.sum(K.cast((1-y_true)*y_pred, 'float'), axis=0)
+    fn = K.sum(K.cast(y_true*(1-y_pred), 'float'), axis=0)
+
+    p = tp / (tp + fp + K.epsilon())
+    r = tp / (tp + fn + K.epsilon())
+
+    f1 = 2*p*r / (p+r+K.epsilon())
+    f1 = tf.where(tf.is_nan(f1), tf.zeros_like(f1), f1)
+    return K.mean(f1)
+
+
+keras.backend.clear_session()
+
+tfconfig = tfconfig = tf.ConfigProto(
+                gpu_options=tf.GPUOptions(allow_growth=True)
+            )
+sess = tf.Session(config=tfconfig)
+K.set_session(sess)
+
+model = create_model(
+    input_shape=(299,299,3), 
+    n_out=28)
+
+model.compile(
+    loss='binary_crossentropy', 
+    optimizer='adam',
+    metrics=['acc', f1])
+
+model.summary()
+
+
+epochs = 10; batch_size = 12
+checkpointer = ModelCheckpoint(
+    './working/Xception.model', 
+    verbose=2, 
+    save_best_only=False)
+
+tensorboard = TensorBoard(log_dir=log_dir, histogram_freq=0, write_graph=True, write_images=True)
+
+# create train and valid datagens
+train_generator = train_datagen.create_train(
+    train_dataset_info, batch_size, (299,299,3))
+validation_generator = train_datagen.create_train(
+    valid_dataset_info, batch_size, (299,299,3))
+K.set_value(model.optimizer.lr, 0.0002)
+# train model
+history = model.fit_generator(
+    train_generator,
+    steps_per_epoch=len(train_df)//batch_size,
+    validation_data=validation_generator,
+    validation_steps=len(valid_df)//batch_size//10,
+    epochs=epochs, 
+    verbose=1,
+    callbacks=[checkpointer, tensorboard])
+
+submit = pd.read_csv('./data/sample_submission.csv')
+
+predicted = []
+from tqdm import tqdm_notebook
+for name in tqdm(submit['Id']):
+    path = os.path.join('./data/test/', name)
+    image1, image2 = train_datagen.load_image(path, (299,299,3))
+    score_predict = model.predict([image1[np.newaxis], image2[np.newaxis]])[0]
+    label_predict = np.arange(28)[score_predict>=0.5]
+    str_predict_label = ' '.join(str(l) for l in label_predict)
+    predicted.append(str_predict_label)
+
+submit['Predicted'] = predicted
+submit.to_csv('submission_two_branches_xception.csv', index=False)
+
+

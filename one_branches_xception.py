@@ -20,7 +20,7 @@ from keras.preprocessing.image import ImageDataGenerator
 from keras.applications import Xception
 from keras.models import Sequential, Model, load_model
 from keras.layers import Activation, Dense, Multiply, Input
-from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, TensorBoard
+from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping, TensorBoard
 from keras import metrics
 from keras.optimizers import Adam  
 from keras import backend as K
@@ -202,7 +202,7 @@ model.compile(
 model.summary()
 
 
-epochs = 50; batch_size = 16
+epochs = 100; batch_size = 16
 checkpointer = ModelCheckpoint(
     os.path.join(log_dir,'Xception.model'), 
     monitor='val_f1',
@@ -213,6 +213,9 @@ checkpointer = ModelCheckpoint(
 
 reduce_lr = ReduceLROnPlateau(monitor='val_f1', factor=0.3, patience=5,
                                    verbose=1, mode='max', epsilon=0.0001)
+early = EarlyStopping(monitor="val_f1",
+                      mode="max",
+                      patience=12)
 
 tensorboard = TensorBoard(log_dir=log_dir, histogram_freq=0, write_graph=True, write_images=True)
 
@@ -230,7 +233,7 @@ history = model.fit_generator(
     validation_steps=len(valid_df)//batch_size//10,
     epochs=epochs, 
     verbose=1,
-    callbacks=[checkpointer, reduce_lr, tensorboard])
+    callbacks=[checkpointer, reduce_lr, early, tensorboard])
 
 submit = pd.read_csv('./data/sample_submission.csv')
 

@@ -207,7 +207,7 @@ model.compile(
 model.summary()
 
 
-epochs = 1; batch_size = 16
+epochs = 100; batch_size = 16
 checkpointer = ModelCheckpoint(
     os.path.join(log_dir,'{}.model'.format(model.name)), 
     monitor='val_f1',

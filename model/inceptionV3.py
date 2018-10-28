@@ -1,4 +1,4 @@
-from keras.models import Sequential, load_model
+from keras.models import Sequential, load_model, Model
 from keras.layers import Activation, Dropout, Flatten, Dense, GlobalMaxPooling2D, BatchNormalization, Input, Conv2D
 from keras.applications.inception_v3 import InceptionV3
 

@@ -1,7 +1,14 @@
+# fix random seed
+from numpy.random import seed
+seed(2018)
+from tensorflow import set_random_seed
+set_random_seed(32)
+
+import argparse
 import os, sys
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 # The GPU id to use, usually either "0" or "1"
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+# os.environ["CUDA_VISIBLE_DEVICES"]="1"
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -35,6 +42,17 @@ from utils import f1
 
 warnings.filterwarnings("ignore")
 
+parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
+parser.add_argument('--gpu', '-g', default='1', type=str,
+                    help='GPU ID (negative value indicates CPU)')
+parser.add_argument('--model', '-m', type=str, default='xception',
+                    help='cnn model')
+args = parser.parse_args()
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# The GPU id to use, usually either "0" or "1"
+os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
+
 path_to_train = './data/train/'
 data = pd.read_csv('./data/train.csv')
 
@@ -43,8 +61,6 @@ print('create directory {}'.format(log_dir))
 os.mkdir(log_dir)
 
 # fix random seed
-np.random.seed(seed=2018)
-tf.set_random_seed(32)
 imgaug.seed(100)
 
 train_dataset_info = []
@@ -162,9 +178,26 @@ tfconfig = tfconfig = tf.ConfigProto(
 sess = tf.Session(config=tfconfig)
 K.set_session(sess)
 
-model = MyInceptionV3.create_model(
-    input_shape=(299,299,3), 
-    n_out=28)
+# create model
+input_shape = (299, 299, 3)
+n_out = 28
+if args.model == 'xception':
+    from model.xception import MyXception
+    model = MyXception.create_model(
+        input_shape=input_shape, 
+        n_out=n_out)
+elif args.model == 'inceptionV3':
+    from model.inceptionV3 import MyInceptionV3
+    model = MyInceptionV3.create_model(
+        input_shape=input_shape, 
+        n_out=n_out)
+elif args.model == 'resnet50':
+    from model.resnet50 import MyResNet50
+    model = MyResNet50.create_model(
+        input_shape=input_shape, 
+        n_out=n_out)
+else:
+    raise ValueError('model name is invalid')
 
 model.compile(
     loss='binary_crossentropy', 
@@ -174,9 +207,9 @@ model.compile(
 model.summary()
 
 
-epochs = 100; batch_size = 16
+epochs = 1; batch_size = 16
 checkpointer = ModelCheckpoint(
-    os.path.join(log_dir,'Xception.model'), 
+    os.path.join(log_dir,'{}.model'.format(model.name)), 
     monitor='val_f1',
     mode='max',
     verbose=2, 
@@ -210,7 +243,7 @@ history = model.fit_generator(
 submit = pd.read_csv('./data/sample_submission.csv')
 
 # load best model
-model.load_weights(os.path.join(log_dir, 'Xception.model'))
+model.load_weights(os.path.join(log_dir, '{}.model'.format(model.name)))
 predicted = []
 from tqdm import tqdm_notebook
 for name in tqdm(submit['Id']):
@@ -222,6 +255,8 @@ for name in tqdm(submit['Id']):
     predicted.append(str_predict_label)
 
 submit['Predicted'] = predicted
-submit.to_csv('submission_one_branches_xception.csv', index=False)
+save_file = 'submission_{}.csv'.format(model.name)
+submit.to_csv(save_file, index=False)
+print('saved to {}'.format(save_file))
 
 

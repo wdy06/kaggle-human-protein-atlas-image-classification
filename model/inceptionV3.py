@@ -18,5 +18,6 @@ class MyInceptionV3:
         x = Dropout(0.5)(x)
         output = Dense(n_out, activation='sigmoid')(x)
         model = Model(input_tensor, output)
+        model.name = 'inceptionV3'
 
         return model

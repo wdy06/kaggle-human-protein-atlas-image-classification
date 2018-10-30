@@ -6,12 +6,14 @@ set_random_seed(32)
 
 import argparse
 import os, sys
+# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# The GPU id to use, usually either "0" or "1"
+# os.environ["CUDA_VISIBLE_DEVICES"]="1"
 from datetime import datetime
 import numpy as np
 import pandas as pd
 #import matplotlib.pyplot as plt
 import skimage.io
-import shutil
 
 from PIL import Image
 from scipy.misc import imread, imresize
@@ -38,7 +40,6 @@ import warnings
 
 from model.inceptionV3 import MyInceptionV3
 from utils import f1
-from model_multi_gpu import ModelMGPU
 
 warnings.filterwarnings("ignore")
 
@@ -47,19 +48,13 @@ parser.add_argument('--gpu', '-g', default='1', type=str,
                     help='GPU ID (negative value indicates CPU)')
 parser.add_argument('--model', '-m', type=str, default='xception',
                     help='cnn model')
-parser.add_argument('--lr', '-l', type=float, default=0.01,
-                    help='learning rate')
-parser.add_argument('--optimizer', '-o', type=str, default='adam',
-                    help='optimizer')
 parser.add_argument("--debug", help="run debug mode",
                     action="store_true")
-parser.add_argument("--multi", type=int, default=1, help="train using multi GPUs")
 args = parser.parse_args()
 
-if not args.multi:
-    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    # The GPU id to use, usually either "0" or "1"
-    os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# The GPU id to use, usually either "0" or "1"
+os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
 
 # set tf session
 keras.backend.clear_session()
@@ -71,11 +66,32 @@ sess = tf.Session(config=tfconfig)
 K.set_session(sess)
 
 path_to_train = './data/train/'
+data = pd.read_csv('./data/train.csv')
+
+log_dir = os.path.join('./tflog/', datetime.strftime(datetime.now(), '%Y%m%d%H%M%S'))
+print('create directory {}'.format(log_dir))
+os.mkdir(log_dir)
 
 # fix random seed
 imgaug.seed(100)
 
 
+# from https://www.kaggle.com/kmader/rgb-transfer-learning-with-inceptionv3-for-protein
+data['target_list'] = data['Target'].map(lambda x: [int(a) for a in x.split(' ')])
+all_labels = list(chain.from_iterable(data['target_list'].values))
+c_val = Counter(all_labels)
+n_keys = c_val.keys()
+max_idx = max(n_keys)
+data['target_vec'] = data['target_list'].map(lambda ck: [i in ck for i in range(max_idx+1)])
+from sklearn.model_selection import train_test_split
+train_df, valid_df = train_test_split(data, 
+                 test_size = 0.2, 
+                  # hack to make stratification work                  
+                 stratify = data['Target'].map(lambda x: x[:3] if '27' not in x else '0'), random_state=42)
+print(train_df.shape[0], 'training masks')
+print(valid_df.shape[0], 'validation masks')
+train_df.to_csv('train_part.csv')
+valid_df.to_csv('valid_part.csv')
 
 def load_4ch_image(path, shape):
     use_channel = [0, 1, 2]
@@ -89,56 +105,68 @@ def load_4ch_image(path, shape):
 input_shape = (299, 299, 3)
 n_out = 28
 
+debug_size = 100
 if args.debug:
-    print('loading train debug data ...')
-    x_train = np.load('./data/x_train_debug.npy')
-    y_train = np.load('./data/y_train_debug.npy')
-    print('loading validation debug data ...')
-    x_valid = np.load('./data/x_valid_debug.npy')
-    y_valid = np.load('./data/y_valid_debug.npy')
+    train_size = debug_size
+    valid_size = debug_size
 else:
-    print('loading train data ...')
-    x_train = np.load('./data/x_train.npy')
-    y_train = np.load('./data/y_train.npy')
-    print('loading validation data ...')
-    x_valid = np.load('./data/x_valid.npy')
-    y_valid = np.load('./data/y_valid.npy')
+    train_size = len(train_df)
+    valid_size = len(valid_df)
+
+x_train = np.empty((train_size, input_shape[0], input_shape[1], input_shape[2]))
+y_train = np.zeros((train_size, n_out))
+
+print('loading train data ...')
+for idx, (name, label) in tqdm(enumerate(zip(train_df['Id'], train_df['target_vec']))):
+    if args.debug and idx >= debug_size:
+        break
+    #print(idx, name, label)
+    path = os.path.join('./data/train/', name)
+    x_train[idx] = load_4ch_image(path, input_shape)/255.
+    y_train[idx][label] = 1
+
+x_valid = np.empty((valid_size, input_shape[0], input_shape[1], input_shape[2]))
+y_valid = np.zeros((valid_size, n_out))
+print('loading validation data ...')
+for idx, (name, label) in tqdm(enumerate(zip(valid_df['Id'], valid_df['target_vec']))):
+    if args.debug and idx >= debug_size:
+        break
+    #print(idx, name, label)
+    path = os.path.join('./data/train/', name)
+    x_valid[idx] = load_4ch_image(path, input_shape)/255.
+    y_valid[idx][label] = 1
+
+# save loaded data to npy
+np.save('./data/x_train.npy', x_train)
+np.save('./data/y_train.npy', y_train)
+np.save('./data/x_valid.npy', x_valid)
+np.save('./data/y_valid.npy', y_valid)
+print('saved npy file')
 
 # create model
 if args.model == 'xception':
     from model.xception import MyXception
-    single_model = MyXception.create_model(
+    model = MyXception.create_model(
         input_shape=input_shape, 
         n_out=n_out)
 elif args.model == 'inceptionV3':
     from model.inceptionV3 import MyInceptionV3
-    single_model = MyInceptionV3.create_model(
+    model = MyInceptionV3.create_model(
         input_shape=input_shape, 
         n_out=n_out)
 elif args.model == 'resnet50':
     from model.resnet50 import MyResNet50
-    single_model = MyResNet50.create_model(
+    model = MyResNet50.create_model(
         input_shape=input_shape, 
         n_out=n_out)
 else:
     raise ValueError('model name is invalid')
 
-
-if args.multi > 1:
-    print('using multi GPUs')
-    model = ModelMGPU(single_model, args.multi)
-else:
-    print('using single GPU')
-    model = single_model
-
-
-
 model.compile(
     loss='binary_crossentropy', 
-    optimizer=args.optimizer,
+    optimizer='adam',
     metrics=['acc', f1])
 
-K.set_value(model.optimizer.lr, args.lr)
 model.summary()
 
 
@@ -146,19 +174,7 @@ if args.debug:
     epochs = 1
 else:
     epochs = 100
-batch_size = 32 * args.multi
-
-# make log directory
-log_dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')+'-{}-{}-lr{}-B{}'.format(args.model, args.optimizer, args.lr, batch_size)
-if args.debug:
-    log_dir_name = 'debug-' + log_dir_name
-log_dir = os.path.join('./tflog/', log_dir_name)
-print('create directory {}'.format(log_dir))
-os.mkdir(log_dir)
-
-
-
-
+batch_size = 16
 checkpointer = ModelCheckpoint(
     os.path.join(log_dir,'{}.model'.format(model.name)), 
     monitor='val_f1',
@@ -183,6 +199,7 @@ datagen = ImageDataGenerator(
     horizontal_flip=True,  # randomly flip images
     vertical_flip=True)
 
+#K.set_value(model.optimizer.lr, 0.0002)
 # train model
 history = model.fit_generator(datagen.flow(x_train, y_train, batch_size=batch_size),
                      epochs=epochs,
@@ -195,12 +212,12 @@ history = model.fit_generator(datagen.flow(x_train, y_train, batch_size=batch_si
 submit = pd.read_csv('./data/sample_submission.csv')
 
 # load best model
-single_model.load_weights(os.path.join(log_dir, '{}.model'.format(model.name)))
+model.load_weights(os.path.join(log_dir, '{}.model'.format(model.name)))
 predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
     image1 = load_4ch_image(path, (299,299,3))/255.
-    score_predict = single_model.predict([image1[np.newaxis]])[0]
+    score_predict = model.predict([image1[np.newaxis]])[0]
     label_predict = np.arange(28)[score_predict>=0.5]
     str_predict_label = ' '.join(str(l) for l in label_predict)
     predicted.append(str_predict_label)
@@ -209,9 +226,5 @@ submit['Predicted'] = predicted
 save_file = 'submission_{}.csv'.format(model.name)
 submit.to_csv(save_file, index=False)
 print('saved to {}'.format(save_file))
-
-if args.debug:
-    print('remove {}'.format(log_dir))
-    shutil.rmtree(log_dir)
 
 

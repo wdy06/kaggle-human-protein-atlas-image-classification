@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 #import matplotlib.pyplot as plt
 import skimage.io
+from sklearn.metrics import f1_score
 import shutil
 
 from PIL import Image
@@ -39,6 +40,7 @@ import warnings
 from model.inceptionV3 import MyInceptionV3
 from utils import f1
 from model_multi_gpu import ModelMGPU
+from focal_loss import focal_loss
 
 warnings.filterwarnings("ignore")
 
@@ -56,7 +58,7 @@ parser.add_argument("--debug", help="run debug mode",
 parser.add_argument("--multi", type=int, default=1, help="train using multi GPUs")
 args = parser.parse_args()
 
-if not args.multi:
+if args.multi == 1:
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
     # The GPU id to use, usually either "0" or "1"
     os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
@@ -86,23 +88,24 @@ def load_4ch_image(path, shape):
 
 
 # load data on memory
-input_shape = (299, 299, 3)
+# input_shape = (299, 299, 3)
+input_shape = (256, 256, 3)
 n_out = 28
 
 if args.debug:
     print('loading train debug data ...')
-    x_train = np.load('./data/x_train_debug.npy')
-    y_train = np.load('./data/y_train_debug.npy')
+    x_train = np.load('./data/npy_data/x_train_debug_rgb_256.npy')
+    y_train = np.load('./data/npy_data/y_train_debug_rgb_256.npy')
     print('loading validation debug data ...')
-    x_valid = np.load('./data/x_valid_debug.npy')
-    y_valid = np.load('./data/y_valid_debug.npy')
+    x_valid = np.load('./data/npy_data/x_valid_debug_rgb_256.npy')
+    y_valid = np.load('./data/npy_data/y_valid_debug_rgb_256.npy')
 else:
     print('loading train data ...')
-    x_train = np.load('./data/x_train.npy')
-    y_train = np.load('./data/y_train.npy')
+    x_train = np.load('./data/npy_data/x_train_rgb_256.npy')
+    y_train = np.load('./data/npy_data/y_train_rgb_256.npy')
     print('loading validation data ...')
-    x_valid = np.load('./data/x_valid.npy')
-    y_valid = np.load('./data/y_valid.npy')
+    x_valid = np.load('./data/npy_data/x_valid_rgb_256.npy')
+    y_valid = np.load('./data/npy_data/y_valid_rgb_256.npy')
 
 # create model
 if args.model == 'xception':
@@ -134,7 +137,7 @@ else:
 
 
 model.compile(
-    loss='binary_crossentropy', 
+    loss=[focal_loss(alpha=.25, gamma=2)], 
     optimizer=args.optimizer,
     metrics=['acc', f1])
 
@@ -160,17 +163,17 @@ os.mkdir(log_dir)
 
 
 checkpointer = ModelCheckpoint(
-    os.path.join(log_dir,'{}.model'.format(model.name)), 
-    monitor='val_f1',
-    mode='max',
+    os.path.join(log_dir,'{}.model'.format(args.model)), 
+    monitor='val_loss',
+    mode='min',
     verbose=2, 
     save_best_only=True,
     save_weights_only=True)
 
-reduce_lr = ReduceLROnPlateau(monitor='val_f1', factor=0.3, patience=5,
-                                   verbose=1, mode='max', epsilon=0.0001)
-early = EarlyStopping(monitor="val_f1",
-                      mode="max",
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.3, patience=5,
+                                   verbose=1, mode='min', epsilon=0.0001)
+early = EarlyStopping(monitor="val_loss",
+                      mode="min",
                       patience=12)
 
 tensorboard = TensorBoard(log_dir=log_dir, histogram_freq=0, write_graph=True, write_images=True)
@@ -191,27 +194,43 @@ history = model.fit_generator(datagen.flow(x_train, y_train, batch_size=batch_si
                      verbose=1,
                      callbacks=[checkpointer, reduce_lr, early, tensorboard])
 
+# load best model
+single_model.load_weights(os.path.join(log_dir, '{}.model'.format(args.model)))
+
+# decide best threshold
+f1_list = []
+threshold_list = list(np.arange(0, 1, 0.01))
+pred_matrix = single_model.predict(x_valid)
+for th in threshold_list:
+    pred_label_matrix = np.zeros(pred_matrix.shape)
+    pred_label_matrix[pred_matrix >= th] = 1
+    f1 = f1_score(y_valid, pred_label_matrix, average='macro')
+    print('threshold: {}, f1_score: {}'.format(th, f1))
+    f1_list.append(f1)
+
+max_f1 = max(f1_list)
+best_th = threshold_list[np.argmax(np.array(f1_list))]
+print('best threshold: {}, best f1 score: {}'.format(best_th, max_f1))
 
 submit = pd.read_csv('./data/sample_submission.csv')
 
-# load best model
-single_model.load_weights(os.path.join(log_dir, '{}.model'.format(model.name)))
 predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
-    image1 = load_4ch_image(path, (299,299,3))/255.
+    image1 = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))/255.
     score_predict = single_model.predict([image1[np.newaxis]])[0]
-    label_predict = np.arange(28)[score_predict>=0.5]
+    label_predict = np.arange(28)[score_predict>=best_th]
     str_predict_label = ' '.join(str(l) for l in label_predict)
     predicted.append(str_predict_label)
 
 submit['Predicted'] = predicted
-save_file = 'submission_{}.csv'.format(model.name)
-submit.to_csv(save_file, index=False)
-print('saved to {}'.format(save_file))
+save_file = 'submission_{}_th{}_valf1_{}.csv'.format(model.name, best_th, max_f1)
+save_file_path = os.path.join(log_dir, save_file)
+submit.to_csv(save_file_path, index=False)
+print('saved to {}'.format(save_file_path))
 
-if args.debug:
-    print('remove {}'.format(log_dir))
-    shutil.rmtree(log_dir)
+#if args.debug:
+    #print('remove {}'.format(log_dir))
+    #shutil.rmtree(log_dir)
 
 

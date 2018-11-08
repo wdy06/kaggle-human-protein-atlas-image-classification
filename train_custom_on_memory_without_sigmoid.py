@@ -166,7 +166,7 @@ else:
     epochs = 100
 batch_size = args.batch * args.multi
 # make log directory
-log_dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')+'-{}-{}-lr{}-B{}-s{}-{}'.format(
+log_dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')+'-{}-{}-lr{}-B{}-s{}-{}-withoutSig'.format(
 				args.model, 
 				args.optimizer, 
 				args.lr, 

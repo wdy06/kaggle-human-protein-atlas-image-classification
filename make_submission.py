@@ -43,6 +43,7 @@ import warnings
 
 from model.inceptionV3 import MyInceptionV3
 from utils import f1
+from util_threshold import find_thresh
 from model_multi_gpu import ModelMGPU
 
 warnings.filterwarnings("ignore")
@@ -107,10 +108,8 @@ submit = pd.read_csv('./data/sample_submission.csv')
 single_model.load_weights(args.weight)
 
 # decide best threshold
-"""
 f1_list = []
 threshold_list = list(np.arange(0, 1, 0.05))
-print(threshold_list)
 pred_matrix = single_model.predict(x_valid)
 for th in threshold_list:
     pred_label_matrix = np.zeros(pred_matrix.shape)
@@ -121,26 +120,24 @@ for th in threshold_list:
 
 max_f1 = max(f1_list)
 best_th = threshold_list[np.argmax(np.array(f1_list))]
-print('best threshold: {}, best f1 score: {}'.format(best_th, max_f1))
-"""    
-man_th = np.array([0.565, 0.39, 0.55, 0.345, 0.33, 0.39, 0.33, 0.45, 0.38, 0.39,
-		   0.34, 0.42, 0.31, 0.38, 0.49, 0.5, 0.38, 0.43, 0.46, 0.4,
-		   0.39, 0.505, 0.37, 0.47, 0.41, 0.545, 0.32, 0.1])
+print('best const threshold: {}, best f1 score: {}'.format(best_th, max_f1))
 
-print(len(man_th))
+# find best threshold2
+ths = find_thresh(pred_matrix, y_valid)
+print(ths)
 
 pred_matrix = single_model.predict(x_valid)
 pred_label_matrix = np.zeros(pred_matrix.shape)
-pred_label_matrix[pred_matrix >= man_th] = 1
+pred_label_matrix[pred_matrix >= ths] = 1
 f1 = f1_score(y_valid, pred_label_matrix, average='macro')
-print('using manualy threshold, f1_score: {}'.format(f1))
+print('using brute force best  threshold, f1_score: {}'.format(f1))
 
 predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
     image1 = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))/255.
     score_predict = single_model.predict([image1[np.newaxis]])[0]
-    label_predict = np.arange(28)[score_predict>=man_th]
+    label_predict = np.arange(28)[score_predict>=ths]
     #label_predict = np.arange(28)[score_predict>=best_th]
     str_predict_label = ' '.join(str(l) for l in label_predict)
     predicted.append(str_predict_label)

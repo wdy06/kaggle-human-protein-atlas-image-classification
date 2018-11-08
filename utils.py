@@ -101,3 +101,6 @@ def f1(y_true, y_pred):
     f1 = 2*p*r / (p+r+K.epsilon())
     f1 = tf.where(tf.is_nan(f1), tf.zeros_like(f1), f1)
     return K.mean(f1)
+
+def sigmoid_np(x):
+    return 1.0/(1.0 + np.exp(-x))

@@ -38,7 +38,7 @@ from collections import Counter
 import warnings
 
 from model.inceptionV3 import MyInceptionV3
-from utils import f1
+from utils import f1, sigmoid_np
 from model_multi_gpu import ModelMGPU
 from focal_loss import focal_loss
 
@@ -118,7 +118,8 @@ if args.model == 'xception':
     from model.xception import MyXception
     single_model = MyXception.create_model(
         input_shape=input_shape, 
-        n_out=n_out)
+        n_out=n_out,
+        without_sigmoid=True)
 elif args.model == 'inceptionV3':
     from model.inceptionV3 import MyInceptionV3
     single_model = MyInceptionV3.create_model(
@@ -223,7 +224,7 @@ single_model.load_weights(os.path.join(log_dir, '{}.model'.format(args.model)))
 # decide best threshold
 f1_list = []
 threshold_list = list(np.arange(0, 1, 0.01))
-pred_matrix = single_model.predict(x_valid)
+pred_matrix = sigmoid_np(single_model.predict(x_valid))
 for th in threshold_list:
     pred_label_matrix = np.zeros(pred_matrix.shape)
     pred_label_matrix[pred_matrix >= th] = 1
@@ -241,7 +242,7 @@ predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
     image1 = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))/255.
-    score_predict = single_model.predict([image1[np.newaxis]])[0]
+    score_predict = sigmoid_np(single_model.predict([image1[np.newaxis]]))[0]
     label_predict = np.arange(28)[score_predict>=best_th]
     str_predict_label = ' '.join(str(l) for l in label_predict)
     predicted.append(str_predict_label)

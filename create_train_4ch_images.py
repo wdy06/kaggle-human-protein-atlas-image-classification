@@ -6,7 +6,7 @@ from PIL import Image
 from tqdm import tqdm
 
 
-data_info = pd.read_csv('./train.csv')
+data_info = pd.read_csv('./data/train.csv')
 train_dir = './data/train'
 
 for name in tqdm(data_info['Id']):

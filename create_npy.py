@@ -67,7 +67,8 @@ def load_4ch_image(path, shape):
 
 
 # load data on memory
-input_shape = (256, 256, 3)
+input_shape = (512, 512, 3)
+
 n_out = 28
 
 debug_size = 100
@@ -102,7 +103,8 @@ for idx, (name, label) in tqdm(enumerate(zip(valid_df['Id'], valid_df['target_ve
     y_valid[idx][label] = 1
 
 # save loaded data to npy
-suffix_str = 'rgb_256'
+suffix_str = 'rgb_512'
+
 if args.debug:
     suffix_str = 'debug_' + suffix_str
 np.save('./data/npy_data/x_train_{}.npy'.format(suffix_str), x_train)

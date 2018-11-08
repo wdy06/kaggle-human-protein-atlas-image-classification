@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 
 data_info = pd.read_csv('./data/sample_submission.csv')
+
 test_dir = './data/test'
 
 for name in tqdm(data_info['Id']):

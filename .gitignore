@@ -1,0 +1,6 @@
+*.csv
+*.swp
+tflog/
+data/
+__pycache__/
+model/__pycache__/

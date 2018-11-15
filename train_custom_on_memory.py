@@ -38,9 +38,12 @@ from collections import Counter
 import warnings
 
 from model.inceptionV3 import MyInceptionV3
-from utils import f1
+from utils import f1, normalize
 from model_multi_gpu import ModelMGPU
 from focal_loss import focal_loss
+from util_threshold import find_thresh
+from keras_tta import TTA_ModelWrapper
+from clr_callback import CyclicLR
 
 warnings.filterwarnings("ignore")
 
@@ -113,6 +116,16 @@ else:
     x_valid = np.load('./data/npy_data/x_valid_rgb_{}.npy'.format(input_shape[0]))
     y_valid = np.load('./data/npy_data/y_valid_rgb_{}.npy'.format(input_shape[0]))
 
+# mean and std of data
+train_stats = np.array([[0.08044203, 0.05263003, 0.05474688],
+                        [0.12098549, 0.07966491, 0.13656638]])
+test_stats = np.array([[0.05908037, 0.04532997, 0.04065239],
+                       [0.09605538, 0.07202642, 0.10485397]])
+
+# normalize
+x_train = normalize(x_train, train_stats)
+x_valid = normalize(x_valid, train_stats)
+
 # create model
 if args.model == 'xception':
     from model.xception import MyXception
@@ -150,6 +163,15 @@ elif args.loss == 'focal':
 else:
     raise ValueError('invalid loss function')
 
+
+batch_size = args.batch * args.multi
+
+use_clr = True
+if use_clr:
+    print('use cycling learning rate')
+    clr = CyclicLR(base_lr=args.lr/10, max_lr=args.lr,
+                            step_size=np.round(len(x_train)/batch_size * 5), mode='triangular2')
+
 model.compile(
     loss=loss_func, 
     optimizer=args.optimizer,
@@ -163,17 +185,26 @@ if args.debug:
     epochs = 1
 else:
     epochs = 100
-batch_size = args.batch * args.multi
+
+# set augment times when test time augmentation
+if args.debug:
+    aug_times = 2
+else:
+    aug_times = 8
+
 # make log directory
-log_dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')+'-{}-{}-lr{}-B{}-s{}-{}'.format(
+log_dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')+'-{}-{}-lr{}-B{}-s{}-{}-brute-tta{}-znorm'.format(
 				args.model, 
 				args.optimizer, 
 				args.lr, 
 				batch_size,
 				args.size,
-                                args.loss)
+                args.loss,
+                aug_times)
 if args.debug:
     log_dir_name = 'debug-' + log_dir_name
+if use_clr:
+    log_dir_name = log_dir_name + '-clr'
 log_dir = os.path.join('./tflog/', log_dir_name)
 print('create directory {}'.format(log_dir))
 os.mkdir(log_dir)
@@ -189,6 +220,10 @@ checkpointer = ModelCheckpoint(
     save_best_only=True,
     save_weights_only=True)
 
+if use_clr:
+    factor=1.
+else:
+    factor=0.3
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.3, patience=5,
                                    verbose=1, mode='min', epsilon=0.0001)
 early = EarlyStopping(monitor="val_loss",
@@ -210,20 +245,30 @@ datagen = ImageDataGenerator(
     vertical_flip=True)
 
 # train model
+
+#defile callback list
+callback_list = [checkpointer, reduce_lr, early, tensorboard]
+if use_clr:
+    callback_list.append(clr)
+
 history = model.fit_generator(datagen.flow(x_train, y_train, batch_size=batch_size),
                      epochs=epochs,
                      validation_data=(x_valid, y_valid),
                      workers=20,
                      verbose=1,
-                     callbacks=[checkpointer, reduce_lr, early, tensorboard])
+                     callbacks=callback_list)
 
 # load best model
 single_model.load_weights(os.path.join(log_dir, '{}.model'.format(args.model)))
 
+# use test time augmentation
+print('use test time augmentation')
+single_model = TTA_ModelWrapper(single_model)
+
 # decide best threshold
 f1_list = []
 threshold_list = list(np.arange(0, 1, 0.01))
-pred_matrix = single_model.predict(x_valid)
+pred_matrix = single_model.predict_tta(x_valid, aug_times=aug_times)
 for th in threshold_list:
     pred_label_matrix = np.zeros(pred_matrix.shape)
     pred_label_matrix[pred_matrix >= th] = 1
@@ -235,13 +280,26 @@ max_f1 = max(f1_list)
 best_th = threshold_list[np.argmax(np.array(f1_list))]
 print('best threshold: {}, best f1 score: {}'.format(best_th, max_f1))
 
+# find best threshold2
+ths = find_thresh(pred_matrix, y_valid)
+print(ths)
+
+#pred_matrix = single_model.predict_tta(x_valid)
+pred_label_matrix = np.zeros(pred_matrix.shape)
+pred_label_matrix[pred_matrix >= ths] = 1
+f1 = f1_score(y_valid, pred_label_matrix, average='macro')
+print('using brute force best  threshold, f1_score: {}'.format(f1))
+
 submit = pd.read_csv('./data/sample_submission.csv')
 
 predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
-    image1 = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))/255.
-    score_predict = single_model.predict([image1[np.newaxis]])[0]
+    image = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))
+    image = image[np.newaxis]
+    image = normalize(image, test_stats)
+    score_predict = single_model.predict_tta(image, aug_times=aug_times)[0]
+    #score_predict = single_model.predict_tta([image], aug_times=aug_times)[0]
     label_predict = np.arange(28)[score_predict>=best_th]
     str_predict_label = ' '.join(str(l) for l in label_predict)
     predicted.append(str_predict_label)
@@ -251,9 +309,5 @@ save_file = 'submission_{}_th{}_valf1_{}.csv'.format(model.name, best_th, max_f1
 save_file_path = os.path.join(log_dir, save_file)
 submit.to_csv(save_file_path, index=False)
 print('saved to {}'.format(save_file_path))
-
-#if args.debug:
-    #print('remove {}'.format(log_dir))
-    #shutil.rmtree(log_dir)
 
 

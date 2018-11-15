@@ -1,4 +1,5 @@
 import numpy as np
+from keras.preprocessing.image import ImageDataGenerator
 
 
 class TTA_ModelWrapper():
@@ -9,8 +10,17 @@ class TTA_ModelWrapper():
 
     def __init__(self, model):
         self.model = model
+        self.gene = datagen = ImageDataGenerator(
+           rotation_range=180,
+           width_shift_range=0.1,
+           height_shift_range=0.1,
+           shear_range=20,
+           zoom_range=[0.8, 1.2],
+           fill_mode='reflect',
+           horizontal_flip=True,
+           vertical_flip=True)
 
-    def predict(self, X):
+    def predict_tta(self, X, aug_times=16):
         """Wraps the predict method of the provided model.
         Augments the testdata with horizontal and vertical flips and
         averages the results.
@@ -20,17 +30,12 @@ class TTA_ModelWrapper():
 
         pred = []
         for x_i in X:
-            p0 = self.model.predict(self._expand(x_i[:, :, 0]))
-            p1 = self.model.predict(self._expand(np.fliplr(x_i[:, :, 0])))
-            p2 = self.model.predict(self._expand(np.flipud(x_i[:, :, 0])))
-            p3 = self.model.predict(self._expand(np.fliplr(np.flipud(x_i[:, :, 0]))))
-            p = (p0 +
-                 self._expand(np.fliplr(p1[0][:, :, 0])) +
-                 self._expand(np.flipud(p2[0][:, :, 0])) +
-                 self._expand(np.fliplr(np.flipud(p3[0][:, :, 0])))
-                  ) / 4
-            pred.append(p)
+            sum_p = 0
+            for i, d in enumerate(self.gene.flow(x_i[np.newaxis], batch_size=1)):
+                if i >= aug_times:
+                    break
+                p = self.model.predict(d)[0]
+                sum_p += p
+            pred.append(sum_p/aug_times)
         return np.array(pred)
 
-    def _expand(self, x):
-        return np.expand_dims(np.expand_dims(x, axis=0), axis=3)

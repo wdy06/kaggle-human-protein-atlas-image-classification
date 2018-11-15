@@ -1,8 +1,6 @@
 # fix random seed
 from numpy.random import seed
 seed(2018)
-from tensorflow import set_random_seed
-set_random_seed(32)
 
 import argparse
 import os, sys
@@ -27,9 +25,6 @@ from tqdm import tqdm_notebook
 from itertools import chain
 from collections import Counter
 import warnings
-
-from model.inceptionV3 import MyInceptionV3
-from utils import f1
 
 
 parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
@@ -88,7 +83,7 @@ for idx, (name, label) in tqdm(enumerate(zip(train_df['Id'], train_df['target_ve
         break
     #print(idx, name, label)
     path = os.path.join('./data/train/', name)
-    x_train[idx] = load_4ch_image(path, input_shape)/255.
+    x_train[idx] = load_4ch_image(path, input_shape)
     y_train[idx][label] = 1
 
 x_valid = np.empty((valid_size, input_shape[0], input_shape[1], input_shape[2]))
@@ -99,7 +94,7 @@ for idx, (name, label) in tqdm(enumerate(zip(valid_df['Id'], valid_df['target_ve
         break
     #print(idx, name, label)
     path = os.path.join('./data/train/', name)
-    x_valid[idx] = load_4ch_image(path, input_shape)/255.
+    x_valid[idx] = load_4ch_image(path, input_shape)
     y_valid[idx][label] = 1
 
 # save loaded data to npy

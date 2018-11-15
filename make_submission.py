@@ -45,6 +45,7 @@ from model.inceptionV3 import MyInceptionV3
 from utils import f1
 from util_threshold import find_thresh
 from model_multi_gpu import ModelMGPU
+from keras_tta import TTA_ModelWrapper
 
 warnings.filterwarnings("ignore")
 
@@ -107,10 +108,14 @@ submit = pd.read_csv('./data/sample_submission.csv')
 # load model weight
 single_model.load_weights(args.weight)
 
+# use test time augmentation
+single_model = TTA_ModelWrapper(single_model)
+
 # decide best threshold
 f1_list = []
 threshold_list = list(np.arange(0, 1, 0.05))
-pred_matrix = single_model.predict(x_valid)
+print('predicting with tta ...')
+pred_matrix = single_model.predict_tta(x_valid)
 for th in threshold_list:
     pred_label_matrix = np.zeros(pred_matrix.shape)
     pred_label_matrix[pred_matrix >= th] = 1
@@ -126,7 +131,7 @@ print('best const threshold: {}, best f1 score: {}'.format(best_th, max_f1))
 ths = find_thresh(pred_matrix, y_valid)
 print(ths)
 
-pred_matrix = single_model.predict(x_valid)
+#pred_matrix = single_model.predict_tta(x_valid)
 pred_label_matrix = np.zeros(pred_matrix.shape)
 pred_label_matrix[pred_matrix >= ths] = 1
 f1 = f1_score(y_valid, pred_label_matrix, average='macro')
@@ -136,7 +141,7 @@ predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
     image1 = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))/255.
-    score_predict = single_model.predict([image1[np.newaxis]])[0]
+    score_predict = single_model.predict_tta(image1[np.newaxis])[0]
     label_predict = np.arange(28)[score_predict>=ths]
     #label_predict = np.arange(28)[score_predict>=best_th]
     str_predict_label = ' '.join(str(l) for l in label_predict)

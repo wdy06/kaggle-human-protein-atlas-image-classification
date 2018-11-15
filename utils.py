@@ -104,3 +104,7 @@ def f1(y_true, y_pred):
 
 def sigmoid_np(x):
     return 1.0/(1.0 + np.exp(-x))
+
+def normalize(data, stats):
+    assert data.shape[3] == stats.shape[1]
+    return (data - stats[0]) / stats[1]

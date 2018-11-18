@@ -62,7 +62,11 @@ parser.add_argument('--size', '-s', type=int, default=256,
                     help='image size')
 parser.add_argument('--optimizer', '-o', type=str, default='adam',
                     help='optimizer')
+parser.add_argument('--weight', '-w', type=str, default=None,
+                    help='pretrained model weight')
 parser.add_argument("--debug", help="run debug mode",
+                    action="store_true")
+parser.add_argument("--use_clr", help="run using cycling leaning rate",
                     action="store_true")
 parser.add_argument("--multi", type=int, default=1, help="train using multi GPUs")
 args = parser.parse_args()
@@ -98,6 +102,8 @@ def load_4ch_image(path, shape):
 
 # load data on memory
 #input_shape = (299, 299, 3)
+
+
 input_shape = (args.size, args.size, 3)
 n_out = 28
 
@@ -117,15 +123,24 @@ else:
     y_valid = np.load('./data/npy_data/y_valid_rgb_{}.npy'.format(input_shape[0]))
 
 # mean and std of data
-train_stats = np.array([[0.08044203, 0.05263003, 0.05474688],
-                        [0.12098549, 0.07966491, 0.13656638]])
-test_stats = np.array([[0.05908037, 0.04532997, 0.04065239],
-                       [0.09605538, 0.07202642, 0.10485397]])
+if args.size == 299:
+    train_stats = np.array([[0.08044203, 0.05263003, 0.05474688],
+                            [0.12098549, 0.07966491, 0.13656638]])
+    test_stats = np.array([[0.05908037, 0.04532997, 0.04065239],
+                           [0.09605538, 0.07202642, 0.10485397]])
+elif args.size == 512:
+    train_stats = np.array([[0.0804419,  0.05262986, 0.05474701],
+                            [0.13000701, 0.08796628, 0.1386317]])
+    test_stats = np.array([[0.05908022, 0.04532852, 0.04065233],
+                           [0.10371015, 0.07984633, 0.10664798]])
+else:
+    raise ValueError('stats data needed.')
 
 # normalize
 x_train = normalize(x_train, train_stats)
 x_valid = normalize(x_valid, train_stats)
 
+    
 # create model
 if args.model == 'xception':
     from model.xception import MyXception
@@ -148,6 +163,17 @@ elif args.model == 'wideResnet':
 else:
     raise ValueError('model name is invalid')
 
+if args.weight is not None:
+    print('run transfer learning')
+    old_input_shape = (299, 299, 3)
+    from model.xception import MyXception
+    old_model = MyXception.create_model(
+        input_shape=old_input_shape, 
+        n_out=n_out)
+    old_model.load_weights(args.weight)
+
+    for layer, old_layer in zip(single_model.layers[1:], old_model.layers[1:]):
+        layer.set_weights(old_layer.get_weights())
 
 if args.multi > 1:
     print('using multi GPUs')
@@ -166,7 +192,7 @@ else:
 
 batch_size = args.batch * args.multi
 
-use_clr = True
+use_clr = args.use_clr
 if use_clr:
     print('use cycling learning rate')
     clr = CyclicLR(base_lr=args.lr/10, max_lr=args.lr,
@@ -199,12 +225,14 @@ log_dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')+'-{}-{}-lr{}-B{
 				args.lr, 
 				batch_size,
 				args.size,
-                args.loss,
-                aug_times)
+                                args.loss,
+                                aug_times)
 if args.debug:
     log_dir_name = 'debug-' + log_dir_name
 if use_clr:
     log_dir_name = log_dir_name + '-clr'
+if args.weight is not None:
+    log_dir_name = log_dir_name + '-transfer'
 log_dir = os.path.join('./tflog/', log_dir_name)
 print('create directory {}'.format(log_dir))
 os.mkdir(log_dir)

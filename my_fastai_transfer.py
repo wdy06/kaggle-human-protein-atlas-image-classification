@@ -31,6 +31,14 @@ import utils_pytorch
 parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
 parser.add_argument("--debug", help="run debug mode",
                     action="store_true")
+parser.add_argument('--weight', '-w', type=str, default=None,
+                    help='pretrained model weight')
+parser.add_argument('--batch', '-B', type=int, default=64,
+                    help='batch size')
+parser.add_argument('--size', '-s', type=int, default=256,
+                    help='image size')
+parser.add_argument('--lr', '-l', type=float, default=0.01,
+                    help='learning rate')
 args = parser.parse_args()
 
 
@@ -64,9 +72,10 @@ def get_data(sz,bs):
     md = ImageData(utils_pytorch.PATH, ds, bs, num_workers=nw, classes=None)
     return md
 
-sz = 512 #image size
-bs = 32  #batch size
+sz = args.size #image size
+bs = args.batch  #batch size
 
+print(f'image size: {sz}, batch size: {bs}')
 dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S') + f'_size{sz}'
 if args.debug:
     dir_name = 'debug-' + dir_name
@@ -78,10 +87,12 @@ best_model_path = dir_name + '_best_resnet'
 md = get_data(sz,bs)
 learner = utils_pytorch.ConvLearner.pretrained(arch, md, ps=0.5) #dropout 50%
 #pretrained_model_name = '20181129055744_size256best_resnet' # 256
-pretrained_model_name = '20181129122117best_resnet' # 299
-print(f'pretrained model: {pretrained_model_name}')
-learner.load(pretrained_model_name)
-learner.set_data(md)
+#pretrained_model_name = '20181129122117best_resnet' # 299
+if args.weight is not None:
+    print('do transfer learning')
+    print(f'pretrained model: {args.weight}')
+    learner.load(args.weight)
+    learner.set_data(md)
 
 learner.opt_fn = optim.Adam
 learner.clip = 1.0 #gradient clipping
@@ -89,7 +100,7 @@ learner.crit = utils_pytorch.FocalLoss()
 learner.metrics = [utils_pytorch.acc, utils_pytorch.f1_torch]
 tb_logger = TensorboardLogger(learner.model, md, dir_path, metrics_names=['acc', 'f1'])
 
-lr = 1e-3
+lr = args.lr
 learner.fit(lr,1, best_save_name=best_model_path, callbacks=[tb_logger])
 
 if args.debug is False:

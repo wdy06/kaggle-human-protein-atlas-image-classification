@@ -31,6 +31,8 @@ import utils_pytorch
 parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
 parser.add_argument("--debug", help="run debug mode",
                     action="store_true")
+parser.add_argument('--model', '-m', type=str, default='xception',
+                    help='cnn model')
 parser.add_argument('--weight', '-w', type=str, default=None,
                     help='pretrained model weight')
 parser.add_argument('--batch', '-B', type=int, default=64,
@@ -43,7 +45,12 @@ args = parser.parse_args()
 
 
 nw = 20   #number of workers for data loader
-arch = resnet34 #specify target architecture
+if args.model == 'resnet34':
+    arch = resnet34 #specify target architecture
+elif args.model == 'resnet50':
+    arch = resnet50
+else:
+    raise ValueError('unknow archtecure')
 
 train_names = list({f[:36] for f in os.listdir(utils_pytorch.TRAIN)})
 test_names = list({f[:36] for f in os.listdir(utils_pytorch.TEST)})
@@ -75,8 +82,8 @@ def get_data(sz,bs):
 sz = args.size #image size
 bs = args.batch  #batch size
 
-print(f'image size: {sz}, batch size: {bs}')
-dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S') + f'_size{sz}'
+print(f'image size: {sz}, batch size: {bs}, learning rate: {args.lr}')
+dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S') + f'_size{sz}_B{bs}_lr{args.lr}_{args.model}'
 if args.debug:
     dir_name = 'debug-' + dir_name
 print(dir_name)
@@ -150,7 +157,8 @@ def fit_val(x,y):
 th = fit_val(pred,y)
 th[th<0.1] = 0.1
 print('Thresholds: ',th)
-print('F1 macro: ',f1_score(y, pred>th, average='macro'))
+f1_macro_score = f1_score(y, pred>th, average='macro')
+print('F1 macro: ',f1_macro_score)
 print('F1 macro (th = 0.5): ',f1_score(y, pred>0.5, average='macro'))
 print('F1 micro: ',f1_score(y, pred>th, average='micro'))
 
@@ -181,7 +189,7 @@ th_t = np.array([0.565,0.39,0.55,0.345,0.33,0.39,0.33,0.45,0.38,0.39,
                0.34,0.42,0.31,0.38,0.49,0.50,0.38,0.43,0.46,0.40,
                0.39,0.505,0.37,0.47,0.41,0.545,0.32,0.1])
 print('Fractions: ',(pred_t > th_t).mean(axis=0))
-save_pred(pred_t,th_t)
+save_pred(pred_t,th_t, f'protein_classification_val{f1_macro_score:.4f}.csv')
 
 print('Thresholds: ',th_t)
 print('F1 macro: ',f1_score(y, pred>th_t, average='macro'))

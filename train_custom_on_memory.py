@@ -38,7 +38,7 @@ from collections import Counter
 import warnings
 
 from model.inceptionV3 import MyInceptionV3
-from utils import f1, normalize
+from utils import f1, normalize, load_4ch_image
 from model_multi_gpu import ModelMGPU
 from focal_loss import focal_loss
 from util_threshold import find_thresh
@@ -87,18 +87,6 @@ K.set_session(sess)
 
 path_to_train = './data/train/'
 
-# fix random seed
-imgaug.seed(100)
-
-
-
-def load_4ch_image(path, shape):
-    use_channel = [0, 1, 2]
-    image = np.array(Image.open(path+'_rgby.png'))
-    image = image[:,:,use_channel]
-    image = resize(image, (shape[0], shape[1], 3), mode='reflect')
-    return image
-
 
 # load data on memory
 #input_shape = (299, 299, 3)
@@ -129,10 +117,10 @@ if args.size == 299:
     test_stats = np.array([[0.05908037, 0.04532997, 0.04065239],
                            [0.09605538, 0.07202642, 0.10485397]])
 elif args.size == 512:
-    train_stats = np.array([[0.0804419,  0.05262986, 0.05474701],
-                            [0.13000701, 0.08796628, 0.1386317]])
-    test_stats = np.array([[0.05908022, 0.04532852, 0.04065233],
-                           [0.10371015, 0.07984633, 0.10664798]])
+    train_stats = np.array([[20.5126856, 13.42061489, 13.96048681],
+                            [33.15178785, 22.43140267, 35.35108422]])
+    test_stats = np.array([[15.06545715, 11.55877239, 10.3663429],
+                           [26.44608851, 20.36081452, 27.19523491]])
 else:
     raise ValueError('stats data needed.')
 
@@ -252,7 +240,7 @@ if use_clr:
     factor=1.
 else:
     factor=0.3
-reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.3, patience=5,
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=factor, patience=5,
                                    verbose=1, mode='min', epsilon=0.0001)
 early = EarlyStopping(monitor="val_loss",
                       mode="min",
@@ -320,10 +308,12 @@ print('using brute force best  threshold, f1_score: {}'.format(f1))
 
 submit = pd.read_csv('./data/sample_submission.csv')
 
+use_channel = [0, 1, 2]
+
 predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
-    image = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))
+    image = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]), use_channel=use_channel)
     image = image[np.newaxis]
     image = normalize(image, test_stats)
     score_predict = single_model.predict_tta(image, aug_times=aug_times)[0]

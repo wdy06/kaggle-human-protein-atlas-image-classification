@@ -26,6 +26,7 @@ from itertools import chain
 from collections import Counter
 import warnings
 
+from utils import load_4ch_image
 
 parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
 parser.add_argument("--debug", help="run debug mode",
@@ -53,18 +54,14 @@ print(valid_df.shape[0], 'validation masks')
 train_df.to_csv('train_part.csv')
 valid_df.to_csv('valid_part.csv')
 
-def load_4ch_image(path, shape):
-    use_channel = [0, 1, 2]
-    image = np.array(Image.open(path+'_rgby.png'))
-    image = image[:,:,use_channel]
-    image = resize(image, (shape[0], shape[1], 3), mode='reflect')
-    return image
-
 
 # load data on memory
-input_shape = (512, 512, 3)
+image_size = 299
+input_shape = (image_size, image_size, 3)
 
 n_out = 28
+
+use_channel = [0, 1, 2]
 
 debug_size = 100
 if args.debug:
@@ -83,7 +80,7 @@ for idx, (name, label) in tqdm(enumerate(zip(train_df['Id'], train_df['target_ve
         break
     #print(idx, name, label)
     path = os.path.join('./data/train/', name)
-    x_train[idx] = load_4ch_image(path, input_shape)
+    x_train[idx] = load_4ch_image(path, input_shape, use_channel=use_channel)
     y_train[idx][label] = 1
 
 x_valid = np.empty((valid_size, input_shape[0], input_shape[1], input_shape[2]))
@@ -94,11 +91,11 @@ for idx, (name, label) in tqdm(enumerate(zip(valid_df['Id'], valid_df['target_ve
         break
     #print(idx, name, label)
     path = os.path.join('./data/train/', name)
-    x_valid[idx] = load_4ch_image(path, input_shape)
+    x_valid[idx] = load_4ch_image(path, input_shape, use_channel=use_channel)
     y_valid[idx][label] = 1
 
 # save loaded data to npy
-suffix_str = 'rgb_512'
+suffix_str = 'rgb_{}'.format(image_size)
 
 if args.debug:
     suffix_str = 'debug_' + suffix_str

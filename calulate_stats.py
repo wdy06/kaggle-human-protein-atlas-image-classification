@@ -5,15 +5,13 @@ from PIL import Image
 from skimage.transform import resize
 from tqdm import tqdm
 
-def load_4ch_image(path, size):
-    image = np.array(Image.open(path+'_rgby.png'))
-    image = resize(image, (size, size, 4), mode='reflect')
-    return image
-
+from utils import load_4ch_image
 
 data_info = pd.read_csv('./data/train.csv')
 train_dir = './data/train'
+
 size = 299
+
 print('size: {}'.format(size))
 
 mean_sum = 0

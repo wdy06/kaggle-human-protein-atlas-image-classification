@@ -42,7 +42,7 @@ from collections import Counter
 import warnings
 
 from model.inceptionV3 import MyInceptionV3
-from utils import f1, normalize
+from utils import f1, normalize, load_4ch_image
 from util_threshold import find_thresh
 from model_multi_gpu import ModelMGPU
 from keras_tta import TTA_ModelWrapper
@@ -62,13 +62,6 @@ tfconfig = tfconfig = tf.ConfigProto(
             )
 sess = tf.Session(config=tfconfig)
 K.set_session(sess)
-
-def load_4ch_image(path, shape):
-    use_channel = [0, 1, 2]
-    image = np.array(Image.open(path+'_rgby.png'))
-    image = image[:,:,use_channel]
-    image = resize(image, (shape[0], shape[1], shape[2]), mode='reflect')
-    return image
 
 
 # load data on memory
@@ -146,10 +139,11 @@ pred_label_matrix[pred_matrix >= ths] = 1
 f1 = f1_score(y_valid, pred_label_matrix, average='macro')
 print('using brute force best  threshold, f1_score: {}'.format(f1))
 
+use_channel = [0, 1, 2]
 predicted = []
 for name in tqdm(submit['Id']):
     path = os.path.join('./data/test/', name)
-    image = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]))
+    image = load_4ch_image(path, (input_shape[0], input_shape[1] ,input_shape[2]), use_channel=use_channel)
     image = image[np.newaxis]
     image = normalize(image, test_stats)
     score_predict = single_model.predict_tta(image, aug_times=aug_times)[0]

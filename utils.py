@@ -5,6 +5,7 @@ from PIL import Image
 import cv2
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
+from skimage.transform import resize
 from keras import backend as K
 import tensorflow as tf
 
@@ -108,3 +109,21 @@ def sigmoid_np(x):
 def normalize(data, stats):
     assert data.shape[3] == stats.shape[1]
     return (data - stats[0]) / stats[1]
+
+def load_4ch_image(path, shape, use_channel=None):
+    if use_channel is None:
+        use_channel = [0, 1, 2, 3]
+
+    assert shape[2] == len(use_channel)
+    # resize by skimage
+    image = np.array(Image.open(path+'_rgby.png'))
+    image = image[:,:,use_channel]
+    image = resize(image, (shape[0], shape[1], len(use_channel)), mode='reflect')
+
+    # resize by PIL
+    #image = Image.open(path+'_rgby.png')
+    #image = image.resize((shape[0], shape[1]))
+    #image = np.array(image)
+    #image = image[:,:,use_channel]
+
+    return image

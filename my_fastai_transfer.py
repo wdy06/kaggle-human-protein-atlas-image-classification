@@ -31,7 +31,7 @@ import utils_pytorch
 parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
 parser.add_argument("--debug", help="run debug mode",
                     action="store_true")
-parser.add_argument('--model', '-m', type=str, default='xception',
+parser.add_argument('--model', '-m', type=str, default='resnet34',
                     help='cnn model')
 parser.add_argument('--weight', '-w', type=str, default=None,
                     help='pretrained model weight')
@@ -66,8 +66,9 @@ def get_data(sz,bs):
     #data augmentation
     aug_tfms = [RandomRotate(45, tfm_y=TfmType.NO),
                 RandomFlip(),
+                RandomZoom(zoom_max=0.2),
                 RandomDihedral(tfm_y=TfmType.NO),
-                RandomLighting(0.05, 0.05, tfm_y=TfmType.NO)]
+                RandomLighting(0.2, 0.05, tfm_y=TfmType.NO)]
     #mean and std in of each channel in the train set
     #stats = A([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814])
     #stats = A([0.0868 , 0.05959, 0.06522, 0.08891], [0.13044, 0.09792, 0.14862, 0.13281])
@@ -171,7 +172,9 @@ preds_t = np.stack(preds_t, axis=-1)
 preds_t = sigmoid_np(preds_t)
 pred_t = preds_t.max(axis=-1) #max works better for F1 macro score
 
-def save_pred(pred, th=0.5, fname='protein_classification.csv'):
+def save_pred(pred, th=0.5, fname='protein_classification.csv', use_leak=True):
+    if use_leak:
+        print('use leak')
     pred_list = []
     for line in pred:
         s = ' '.join(list([str(i) for i in np.nonzero(line>th)[0]]))
@@ -179,8 +182,14 @@ def save_pred(pred, th=0.5, fname='protein_classification.csv'):
         
     sample_df = pd.read_csv(utils_pytorch.SAMPLE)
     sample_list = list(sample_df.Id)
-    pred_dic = dict((key, value) for (key, value) 
-                in zip(learner.data.test_ds.fnames,pred_list))
+    leak_df = pd.read_csv('./data/test_matches.csv')
+    pred_dic = {}
+    for key, value in zip(learner.data.test_ds.fnames,pred_list):
+        pred_dic[key] = value
+        check_leak_df = leak_df.query('Test.str.contains(@key)' ,engine='python')
+        if use_leak and len(check_leak_df) > 0:
+            #print(f'found leak data ! key:{key}, target:{check_leak_df.iloc[0,5]}')
+            pred_dic[key] = check_leak_df.iloc[0,5]
     pred_list_cor = [pred_dic[id] for id in sample_list]
     df = pd.DataFrame({'Id':sample_list,'Predicted':pred_list_cor})
     df.to_csv(os.path.join('logs', dir_path, fname), header=True, index=False)

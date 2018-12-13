@@ -10,9 +10,11 @@ torch.manual_seed(7)
 torch.cuda.manual_seed_all(7)
 
 PATH = './'
-TRAIN = './data/train/'
+#TRAIN = './data/train/'
+TRAIN = './data/all_train/'
 TEST = './data/test/'
-LABELS = './data/train.csv'
+#LABELS = './data/train.csv'
+LABELS = './data/augment_train.csv'
 SAMPLE = './data/sample_submission.csv'
 
 name_label_dict = {
@@ -47,12 +49,16 @@ name_label_dict = {
 
 def open_rgby(path,id): #a function that reads RGBY image
     colors = ['red','green','blue','yellow']
-    #flags = cv2.IMREAD_GRAYSCALE
-    #img = [cv2.imread(os.path.join(path, id+'_'+color+'.png'), flags).astype(np.float32)/255
-           #for color in colors]
-    img = np.array(Image.open(os.path.join(path, id+'_'+'rgby.png')))/255.
-    #return np.stack(img, axis=-1)
-    return img
+    flags = cv2.IMREAD_GRAYSCALE
+    try:
+        img = [cv2.imread(os.path.join(path, id+'_'+color+'.png'), flags).astype(np.float32)/255
+               for color in colors]
+        return np.stack(img, axis=-1)
+    except:
+        print(f'id: {id}')
+        raise FileNotFoundError(os.path.join(path, id+"_"+color+".png"))
+    #img = np.array(Image.open(os.path.join(path, id+'_'+'rgby.png')))/255.
+    #return img
 
 def display_imgs(x):
     columns = 4

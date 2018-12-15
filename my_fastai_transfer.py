@@ -66,13 +66,13 @@ def get_data(sz,bs):
     #data augmentation
     aug_tfms = [RandomRotate(45, tfm_y=TfmType.NO),
                 RandomFlip(),
-                RandomZoom(zoom_max=0.2),
                 RandomDihedral(tfm_y=TfmType.NO),
-                RandomLighting(0.2, 0.05, tfm_y=TfmType.NO)]
+                RandomLighting(0.05, 0.05, tfm_y=TfmType.NO)]
     #mean and std in of each channel in the train set
     #stats = A([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814])
     #stats = A([0.0868 , 0.05959, 0.06522, 0.08891], [0.13044, 0.09792, 0.14862, 0.13281])
-    stats = A([0.0804419, 0.05262986, 0.05474701, 0.08270896], [0.13000701, 0.08796628, 0.1386317, 0.12718021]) # calulate myself
+    #stats = A([0.0804419, 0.05262986, 0.05474701, 0.08270896], [0.13000701, 0.08796628, 0.1386317, 0.12718021]) # calulate myself
+    stats = A([0.06734, 0.05087, 0.03266, 0.09257],[0.11997, 0.10335, 0.10124, 0.1574 ]) # include external data, caluculated by moriyama
     tfms = tfms_from_stats(stats, sz, crop_type=CropType.NO, tfm_y=TfmType.NO, 
                 aug_tfms=aug_tfms)
     ds = ImageData.get_ds(utils_pytorch.pdFilesDataset, (tr_n[:-(len(tr_n)%bs)],utils_pytorch.TRAIN), 

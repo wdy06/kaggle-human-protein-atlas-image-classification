@@ -27,11 +27,12 @@ import torch
 torch.manual_seed(7)
 torch.cuda.manual_seed_all(7)
 import utils_pytorch
+import custom_model
 
 parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
 parser.add_argument("--debug", help="run debug mode",
                     action="store_true")
-parser.add_argument('--model', '-m', type=str, default='resnet34',
+parser.add_argument('--model', '-m', type=str, default='se_resnet34',
                     help='cnn model')
 parser.add_argument('--weight', '-w', type=str, default=None,
                     help='pretrained model weight')
@@ -45,12 +46,7 @@ args = parser.parse_args()
 
 
 nw = 20   #number of workers for data loader
-if args.model == 'resnet34':
-    arch = resnet34 #specify target architecture
-elif args.model == 'resnet50':
-    arch = resnet50
-else:
-    raise ValueError('unknow archtecure')
+arch = custom_model.get_model(args.model)
 
 train_names = list({f[:36] for f in os.listdir(utils_pytorch.TRAIN)})
 test_names = list({f[:36] for f in os.listdir(utils_pytorch.TEST)})
@@ -94,7 +90,9 @@ best_model_path = dir_name + '_best'
 
 
 md = get_data(sz,bs)
-learner = utils_pytorch.ConvLearner.pretrained(arch, md, ps=0.5) #dropout 50%
+learner = ConvLearner.pretrained(arch, md, ps=0.5) #dropout 50%
+# use multi gpu
+learner.models.model = torch.nn.DataParallel(learner.models.model,device_ids=[0, 1])
 #pretrained_model_name = '20181129055744_size256best_resnet' # 256
 #pretrained_model_name = '20181129122117best_resnet' # 299
 if args.weight is not None:
@@ -102,9 +100,6 @@ if args.weight is not None:
     print(f'pretrained model: {args.weight}')
     learner.load(args.weight)
     learner.set_data(md)
-
-# use multi gpu
-learner.models.model = torch.nn.DataParallel(learner.models.model,device_ids=[0, 1])
 
 learner.opt_fn = optim.Adam
 learner.clip = 1.0 #gradient clipping
@@ -137,10 +132,10 @@ if args.debug:
 else:
     n_aug=16
     
-# small batchsize
-#bs = 8
-#md = get_data(sz,bs)
-#learner.set_data(md)
+#small batchsize
+md = get_data(sz,int(bs/2))
+learner.set_data(md)
+
 preds,y = learner.TTA(n_aug=n_aug)
 preds = np.stack(preds, axis=-1)
 preds = sigmoid_np(preds)

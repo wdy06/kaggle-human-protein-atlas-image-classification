@@ -28,29 +28,10 @@ torch.manual_seed(7)
 torch.cuda.manual_seed_all(7)
 import utils_pytorch
 
-parser = argparse.ArgumentParser(description='atlas-protein-image-classification on kaggle')
-parser.add_argument("--debug", help="run debug mode",
-                    action="store_true")
-parser.add_argument('--model', '-m', type=str, default='resnet34',
-                    help='cnn model')
-parser.add_argument('--weight', '-w', type=str, default=None,
-                    help='pretrained model weight')
-parser.add_argument('--batch', '-B', type=int, default=64,
-                    help='batch size')
-parser.add_argument('--size', '-s', type=int, default=256,
-                    help='image size')
-parser.add_argument('--lr', '-l', type=float, default=0.01,
-                    help='learning rate')
-args = parser.parse_args()
 
 
 nw = 20   #number of workers for data loader
-if args.model == 'resnet34':
-    arch = resnet34 #specify target architecture
-elif args.model == 'resnet50':
-    arch = resnet50
-else:
-    raise ValueError('unknow archtecure')
+arch = resnet34 #specify target architecture
 
 train_names = list({f[:36] for f in os.listdir(utils_pytorch.TRAIN)})
 test_names = list({f[:36] for f in os.listdir(utils_pytorch.TEST)})
@@ -72,8 +53,7 @@ def get_data(sz,bs):
     #stats = A([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814])
     #stats = A([0.0868 , 0.05959, 0.06522, 0.08891], [0.13044, 0.09792, 0.14862, 0.13281])
     #stats = A([0.0804419, 0.05262986, 0.05474701, 0.08270896], [0.13000701, 0.08796628, 0.1386317, 0.12718021]) # calulate myself
-    #stats = A([0.06734, 0.05087, 0.03266, 0.09257],[0.11997, 0.10335, 0.10124, 0.1574 ]) # include external data, caluculated by moriyama
-    stats = A([0.1057, 0.06651, 0.06325, 0.09928],[0.15266, 0.10139, 0.15967, 0.14573]) # include external data, caluculated by myself
+    stats = A([0.06734, 0.05087, 0.03266, 0.09257],[0.11997, 0.10335, 0.10124, 0.1574 ]) # include external data, caluculated by moriyama
     tfms = tfms_from_stats(stats, sz, crop_type=CropType.NO, tfm_y=TfmType.NO, 
                 aug_tfms=aug_tfms)
     ds = ImageData.get_ds(utils_pytorch.pdFilesDataset, (tr_n[:-(len(tr_n)%bs)],utils_pytorch.TRAIN), 
@@ -81,68 +61,40 @@ def get_data(sz,bs):
     md = ImageData(utils_pytorch.PATH, ds, bs, num_workers=nw, classes=None)
     return md
 
-sz = args.size #image size
-bs = args.batch  #batch size
-
-print(f'image size: {sz}, batch size: {bs}, learning rate: {args.lr}')
-dir_name = datetime.strftime(datetime.now(), '%Y%m%d%H%M%S') + f'_size{sz}_B{bs}_lr{args.lr}_{args.model}'
-if args.debug:
-    dir_name = 'debug-' + dir_name
-print(dir_name)
-dir_path = os.path.join('test', dir_name)
-best_model_path = dir_name + '_best'
+sz = 512 #image size
+bs = 32  #batch size
 
 
 md = get_data(sz,bs)
-learner = utils_pytorch.ConvLearner.pretrained(arch, md, ps=0.5) #dropout 50%
-#pretrained_model_name = '20181129055744_size256best_resnet' # 256
-#pretrained_model_name = '20181129122117best_resnet' # 299
-if args.weight is not None:
-    print('do transfer learning')
-    print(f'pretrained model: {args.weight}')
-    learner.load(args.weight)
+
+model_name_list = ['20181216022415_size512_B32_lr0.0001_resnet34_best_resnet',
+                   '20181125082823best_resnet']
+model_list = []
+for model_name in model_name_list:
+    learner = utils_pytorch.ConvLearner.pretrained(arch, md, ps=0.5) #dropout 50%
+    print(f'load pretrained model: {pretrained_model_name}')
+    learner.load(pretrained_model_name)
     learner.set_data(md)
+    model_list.append(learner)
 
-# use multi gpu
-learner.models.model = torch.nn.DataParallel(learner.models.model,device_ids=[0, 1])
-
-learner.opt_fn = optim.Adam
-learner.clip = 1.0 #gradient clipping
-learner.crit = utils_pytorch.FocalLoss()
-learner.metrics = [utils_pytorch.acc, utils_pytorch.f1_torch]
-tb_logger = TensorboardLogger(learner.model, md, dir_path, metrics_names=['acc', 'f1'])
-
-lr = args.lr
-learner.fit(lr,1, best_save_name=best_model_path, callbacks=[tb_logger])
-
-if args.debug is False:
-    learner.unfreeze()
-    lrs=np.array([lr/10,lr/3,lr])
-    learner.fit(lrs/4,4,cycle_len=2,use_clr=(10,20), best_save_name=best_model_path, callbacks=[tb_logger])
-
-    learner.fit(lrs/4,2,cycle_len=4,use_clr=(10,20), best_save_name=best_model_path, callbacks=[tb_logger])
-
-    learner.fit(lrs/16,1,cycle_len=8,use_clr=(5,20), best_save_name=best_model_path, callbacks=[tb_logger])
-
-    learner.save('ResNet34_256_1')
-
-learner.load(best_model_path)
-#learner.models.model = torch.nn.DataParallel(learner.models.model,device_ids=[0, 1])
 
 def sigmoid_np(x):
     return 1.0/(1.0 + np.exp(-x))
 
-if args.debug:
-    n_aug=2
-else:
-    n_aug=16
+n_aug=16
     
 # small batchsize
 #bs = 8
 #md = get_data(sz,bs)
 #learner.set_data(md)
-preds,y = learner.TTA(n_aug=n_aug)
-preds = np.stack(preds, axis=-1)
+
+print('validation')
+sum_preds = 0
+for learner in tqdm(model_list):
+    preds,y = learner.TTA(n_aug=n_aug)
+    preds = np.stack(preds, axis=-1)
+    sum_preds += preds
+preds = sum_preds / len(model_list)
 preds = sigmoid_np(preds)
 pred = preds.max(axis=-1)
 
@@ -171,9 +123,17 @@ print('F1 micro: ',f1_score(y, pred>th, average='micro'))
 print('Fractions: ',(pred > th).mean(axis=0))
 print('Fractions (true): ',(y > th).mean(axis=0))
 
+# stats = np.array([[0.05908022, 0.04532852, 0.04065233, 0.05923426], [0.10371015, 0.07984633, 0.10664798, 0.09878183]])
+# md = get_data(sz,bs, stats)
+# learner.set_data(md)
 
-preds_t,y_t = learner.TTA(n_aug=n_aug,is_test=True)
-preds_t = np.stack(preds_t, axis=-1)
+print('test')
+test_sum_preds = 0
+for learner in tqdm(model_list):
+    preds_t,y_t = learner.TTA(n_aug=n_aug,is_test=True)
+    preds_t = np.stack(preds_t, axis=-1)
+    test_sum_preds += preds_t
+preds_t = test_sum_preds / len(model_list)
 preds_t = sigmoid_np(preds_t)
 pred_t = preds_t.max(axis=-1) #max works better for F1 macro score
 
@@ -197,9 +157,7 @@ def save_pred(pred, th=0.5, fname='protein_classification.csv', use_leak=True):
             pred_dic[key] = check_leak_df.iloc[0,5]
     pred_list_cor = [pred_dic[id] for id in sample_list]
     df = pd.DataFrame({'Id':sample_list,'Predicted':pred_list_cor})
-    save_path = os.path.join('logs', dir_path, fname) 
-    print(f'save to: {save_path}')
-    df.to_csv(save_path, header=True, index=False)
+    df.to_csv(fname, header=True, index=False)
     
 th_t = np.array([0.565,0.39,0.55,0.345,0.33,0.39,0.33,0.45,0.38,0.39,
                0.34,0.42,0.31,0.38,0.49,0.50,0.38,0.43,0.46,0.40,

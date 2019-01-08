@@ -1,13 +1,16 @@
 import numpy as np
-np.random.seed(seed=32)
+#np.random.seed(seed=32)
 import pandas as pd
 from PIL import Image
+import scipy.optimize as opt
 
 from fastai.conv_learner import *
 from fastai.dataset import *
 import torch
-torch.manual_seed(7)
-torch.cuda.manual_seed_all(7)
+#torch.manual_seed(7)
+#torch.cuda.manual_seed_all(7)
+
+#import pretrainedmodels
 
 PATH = './'
 #TRAIN = './data/train/'
@@ -47,18 +50,19 @@ name_label_dict = {
 26:  'Cytoplasmic bodies',   
 27:  'Rods & rings' }
 
+
 def open_rgby(path,id): #a function that reads RGBY image
-    colors = ['red','green','blue','yellow']
-    flags = cv2.IMREAD_GRAYSCALE
-    try:
-        img = [cv2.imread(os.path.join(path, id+'_'+color+'.png'), flags).astype(np.float32)/255
-               for color in colors]
-        return np.stack(img, axis=-1)
-    except:
-        print(f'id: {id}')
-        raise FileNotFoundError(os.path.join(path, id+"_"+color+".png"))
-    #img = np.array(Image.open(os.path.join(path, id+'_'+'rgby.png')))/255.
-    #return img
+#     colors = ['red','green','blue','yellow']
+#     flags = cv2.IMREAD_GRAYSCALE
+#     try:
+#         img = [cv2.imread(os.path.join(path, id+'_'+color+'.png'), flags).astype(np.float32)/255
+#                for color in colors]
+#         return np.stack(img, axis=-1)
+#     except:
+#         print(f'id: {id}')
+#         raise FileNotFoundError(os.path.join(path, id+"_"+color+".png"))
+    img = np.array(Image.open(os.path.join(path, id+'_'+'rgby.png'))).astype(np.float32)/255.
+    return img
 
 def display_imgs(x):
     columns = 4
@@ -72,6 +76,60 @@ def display_imgs(x):
             plt.axis('off')
             plt.imshow((x[idx,:,:,:3]*255).astype(np.int))
     plt.show()
+
+def save_pred(learner, pred, th=0.5, fname='protein_classification.csv', use_leak=True):
+    if use_leak:
+        print('use leak')
+    pred_list = []
+    for line in pred:
+        s = ' '.join(list([str(i) for i in np.nonzero(line>th)[0]]))
+        if s == '':
+            s = str(np.argmax(line))
+        pred_list.append(s)
+        
+    sample_df = pd.read_csv(SAMPLE)
+    sample_list = list(sample_df.Id)
+    leak_df = pd.read_csv('./data/test_matches.csv')
+    pred_dic = {}
+    for key, value in zip(learner.data.test_ds.fnames,pred_list):
+        pred_dic[key] = value
+        check_leak_df = leak_df.query('Test.str.contains(@key)' ,engine='python')
+        if use_leak and len(check_leak_df) > 0:
+            #print(f'found leak data ! key:{key}, target:{check_leak_df.iloc[0,5]}')
+            pred_dic[key] = check_leak_df.iloc[0,5]
+    pred_list_cor = [pred_dic[id] for id in sample_list]
+    df = pd.DataFrame({'Id':sample_list,'Predicted':pred_list_cor})
+    print(f'save to: {fname}')
+    df.to_csv(fname, header=True, index=False)
+    
+def sigmoid_np(x):
+    return 1.0/(1.0 + np.exp(-x))
+
+def F1_soft(preds,targs,th=0.5,d=50.0):
+    preds = sigmoid_np(d*(preds - th))
+    targs = targs.astype(np.float)
+    score = 2.0*(preds*targs).sum(axis=0)/((preds+targs).sum(axis=0) + 1e-6)
+    return score
+
+def fit_val(x,y):
+    params = 0.5*np.ones(len(name_label_dict))
+    wd = 1e-5
+    error = lambda p: np.concatenate((F1_soft(x,y,p) - 1.0,
+                                      wd*(p - 0.5)), axis=None)
+    p, success = opt.leastsq(error, params)
+    return p
+
+def Count_soft(preds,th=0.5,d=50.0):
+    preds = sigmoid_np(d*(preds - th))
+    return preds.mean(axis=0)
+
+def fit_test(x,y):
+    params = 0.5*np.ones(len(name_label_dict))
+    wd = 1e-5
+    error = lambda p: np.concatenate((Count_soft(x,p) - y,
+                                      wd*(p - 0.5)), axis=None)
+    p, success = opt.leastsq(error, params)
+    return p
 
 def calculate_stats(md):
     x_tot = np.zeros(4)
@@ -163,13 +221,20 @@ class ConvnetBuilder_custom():
         if f in model_meta: cut,self.lr_cut = model_meta[f]
         else: cut,self.lr_cut = 0,0
         cut-=xtra_cut
+        
+        
+        #f_ = f(pretrained='imagenet')
+#         f_ = f(True)
+#         w = f_.conv1.weight
+#         f_.conv1 = nn.Conv2d(4,64,kernel_size=(7,7),stride=(2,2),padding=(3, 3), bias=False)
+#         f_.conv1.weight = torch.nn.Parameter(torch.cat((w,w[:,:1,:,:]),dim=1))
+#         layers = cut_model(f_, cut)
         layers = cut_model(f(pretrained), cut)
         
-        #replace first convolutional layer by 4->64 while keeping corresponding weights
-        #and initializing new weights with zeros
         w = layers[0].weight
         layers[0] = nn.Conv2d(4,64,kernel_size=(7,7),stride=(2,2),padding=(3, 3), bias=False)
         layers[0].weight = torch.nn.Parameter(torch.cat((w,w[:,:1,:,:]),dim=1))
+
         
         self.nf = model_features[f] if f in model_features else (num_features(layers)*2)
         if not custom_head: layers += [AdaptiveConcatPool2d(), Flatten()]
@@ -187,7 +252,18 @@ class ConvnetBuilder_custom():
 
     @property
     def name(self): return f'{self.f.__name__}_{self.xtra_cut}'
-
+    
+    def get_first_layer(self, layers):
+        i = 0
+        while True:
+            if i == 0:
+                layer = next(layers[0].children())
+            else:
+                layer = next(layer.children())
+            if isinstance(layer, nn.Conv2d):
+                return layer
+            i += 1
+            
     def create_fc_layer(self, ni, nf, p, actn=None):
         res=[nn.BatchNorm1d(num_features=ni)]
         if p: res.append(nn.Dropout(p=p))
@@ -235,6 +311,7 @@ class ConvLearner(Learner):
                    pretrained=True, **kwargs):
         models = ConvnetBuilder_custom(f, data.c, data.is_multi, data.is_reg,
             ps=ps, xtra_fc=xtra_fc, xtra_cut=xtra_cut, custom_head=custom_head, pretrained=pretrained)
+        #models = to_gpu(f)
         return cls(data, models, precompute, **kwargs)
 
     @classmethod
